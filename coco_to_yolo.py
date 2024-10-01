@@ -1,37 +1,59 @@
-import json
 import os
-from shutil import copyfile
+import json
 
-def coco_to_yolo(coco_json, image_dir, label_dir):
-    with open(coco_json, 'r') as f:
+from tqdm import tqdm
+
+
+def coco_to_yolo(coco_annotation_file, output_dir):
+    # 创建 labels 输出文件夹
+    labels_output_dir = os.path.join(output_dir, 'labels') # 修改
+    os.makedirs(labels_output_dir, exist_ok=True)
+
+    # 读取 COCO 标注文件
+    with open(coco_annotation_file, 'r') as f:
         coco_data = json.load(f)
 
-    category_dict = {category['id']: category['name'] for category in coco_data['categories']}
+    # 获取图像信息和类别信息
+    images = {image['id']: image for image in coco_data['images']}
+    categories = {category['id']: category['name'] for category in coco_data['categories']}
 
-    for annotation in coco_data['annotations']:
+    # 用于归一化标注框坐标的函数
+    def convert_bbox(size, box):
+        dw = 1. / size[0]
+        dh = 1. / size[1]
+        x = (box[0] + box[2]) / 2.0  # x_center
+        y = (box[1] + box[3]) / 2.0  # y_center
+        w = box[2] - box[0]  # width
+        h = box[3] - box[1]  # height
+        return (x * dw, y * dh, w * dw, h * dh)
+
+    # 遍历标注文件中的每个目标
+    for annotation in tqdm(coco_data['annotations']):
         image_id = annotation['image_id']
         category_id = annotation['category_id']
-        bbox = annotation['bbox']  # [x, y, width, height]
-        image_name = [img['file_name'] for img in coco_data['images'] if img['id'] == image_id][0]
-        image_path = os.path.join(image_dir, image_name)
+        bbox = annotation['bbox']  # COCO 格式的 bbox: [x_min, y_min, width, height]
 
-        # 将标注写入相应的 YOLO 格式文件
-        label_file = os.path.join(label_dir, image_name.split('.')[0] + '.txt')
-        with open(label_file, 'a') as label:
-            x_center = (bbox[0] + bbox[2] / 2) / 640  # Assuming 640x640 image size
-            y_center = (bbox[1] + bbox[3] / 2) / 640
-            width = bbox[2] / 640
-            height = bbox[3] / 640
-            label.write(f"{category_id} {x_center} {y_center} {width} {height}\n")
+        # 获取图像的文件名和尺寸
+        image_info = images[image_id]
+        image_file_name = image_info['file_name']
+        image_width = image_info['width']
+        image_height = image_info['height']
 
-        # 复制图像文件
-        if not os.path.exists(os.path.join(label_dir, image_name)):
-            copyfile(os.path.join(image_dir, image_name), os.path.join(label_dir, image_name))
+        # 转换 bbox 坐标为 YOLO 格式: [class_id, x_center, y_center, width, height]
+        yolo_bbox = convert_bbox((image_width, image_height), bbox)
 
-# 设置路径
-coco_json = 'path/to/coco/annotations/instances_train2017.json'
-image_dir = 'path/to/coco/train2017'
-label_dir = 'path/to/your/yolo_dataset/labels/train'
+        # 创建 YOLO 格式的标签文件 (.txt)
+        label_file_name = os.path.splitext(image_file_name)[0] + '.txt'
+        label_file_path = os.path.join(labels_output_dir, label_file_name)
 
-# 调用转换函数
-coco_to_yolo(coco_json, image_dir, label_dir)
+        # 写入标签文件
+        with open(label_file_path, 'a') as label_file:
+            label_file.write(f"{category_id - 1} " + " ".join(map(str, yolo_bbox)) + '\n')
+
+
+if __name__ == '__main__':
+    # 配置 COCO 数据集路径
+    coco_annotation_file = '/path/to/coco/annotations/instances_train2017.json'  # COCO 标注文件
+    output_dir = '/path/to/output/dataset'  # YOLO 格式的输出路径
+
+    coco_to_yolo(coco_annotation_file, output_dir)
